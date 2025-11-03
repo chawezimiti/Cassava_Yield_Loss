@@ -1,0 +1,10 @@
+# Ignore all the csv files
+*.csv
+
+# Ignore R studio files
+
+*.Rhistory
+*.RData
+
+Tanzania/.RData
+Tanzania/01-all_tanzania_daily_temp(v2).csv
