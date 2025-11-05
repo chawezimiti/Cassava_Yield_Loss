@@ -6,7 +6,11 @@
 
 # some useful information on cassava can be found here https://greg.app/cassava-lifecycle/
 
-#------ Load necessary libraries and Source files ------------------------------
+#------ Install and Load necessary libraries and Source files ------------------------------
+
+library(devtools)
+install_github("chawezimiti/BLA") # installs the development version of BLA
+
 
 library(readr)
 library(readxl)
@@ -38,42 +42,8 @@ data$experiment_year <- ifelse(data$experiment_year=="2013-2016", "2013", data$e
 data <- data %>% mutate(experiment_year = as.integer(experiment_year)) #converts the experimental year column to integer
 years <- sort(unique(na.omit(data$experiment_year)))
 
-##---- Min and max Temp aggregation---------------------------------------------
 
-# We determine the average annual minimum and maximum temperature for each point location in the data set based on experiment year
-
-# a) Min temp
-
-for (yr in years) {
-  data <- data %>%
-    mutate(!!paste0("tmin_mean_", yr) :=
-             rowMeans(select(., matches(paste0("^tmin_", yr,"_"))), na.rm = TRUE))
-}
-
-idx <- match(paste0("tmin_mean_", data$experiment_year), names(data)) # column number selected
-
-data$tmin_yr_data <- mapply(
-  function(i, j) if (is.na(j)) NA_real_ else as.numeric(data[[j]][i]), # Adding column to data frame
-  seq_len(nrow(data)), idx
-)
-
-# b) Max temp
-for (yr in years) {
-  data <- data %>%
-    mutate(!!paste0("tmax_mean_", yr) :=
-             rowMeans(select(., matches(paste0("^tmax_", yr,"_"))), na.rm = TRUE))
-}
-
-idx <- match(paste0("tmax_mean_", data$experiment_year), names(data)) # column number selected
-
-data$tmax_yr_data <- mapply(
-  function(i, j) if (is.na(j)) NA_real_ else as.numeric(data[[j]][i]), # Adding column to data frame
-  seq_len(nrow(data)), idx
-)
-
-
-
-# c) Growing Degree days
+# a) Growing Degree days
 
 # This is calculated as sum(max((Tmim + Tmax)*0.5 -Tbase, 0)) over the growing period (12 months) from planting date 
 
@@ -135,53 +105,132 @@ if (length(common_dates) == 0L) { # If no overlap, bail early
 
 
 
-##---- Rainfall aggregation-----------------------------------------------------
+# b)Rainfall aggregation-----------------------------------------------------
 
-# The rainfall is determined as the cumulative rainfall for that particular year
+# The rainfall is determined as the cumulative rainfall for 12 months from planting date
 
-for (yr in years) {
-  data <- data %>%
-    mutate(!!paste0("pmm_sum_", yr) :=
-             rowSums(select(., matches(paste0("^pmm_.*_", yr, "$"))), na.rm = TRUE))
-}
+## 1) Find rainfall columns of the form pmm_<mon>_<year>
 
-idx <- match(paste0("pmm_sum_", data$experiment_year), names(data)) # column number selected
+rain_cols <- grep("^(?:pmm|ppm)_[a-z]{3}_\\d{4}$", names(data), value = TRUE, ignore.case = TRUE)
 
-data$pmm_yr_data <- mapply(
-  function(i, j) if (is.na(j)) NA_real_ else as.numeric(data[[j]][i]), # Adding column to data frame
-  seq_len(nrow(data)), idx
-)
-
-
-##---- SPEI INDEX---------------------------------------------------------------
-
-# Determine the average spei index over the growing period
-
-for (yr in years) {
-  # columns like "spei_2023-12-31" start with "spei_2023-"
-  cols <- grep(paste0("^spei_", yr, "-"), names(data), value = TRUE)
-  new_name <- paste0("spei_mean_", yr)
+if (length(rain_cols) == 0L) {
+  data$pmm_sum_12mo <- NA_real_
+} else {
+  ## 2) Parse month + year from column names and order them chronologically
+  rx <- "^(?:pmm|ppm)_([a-z]{3})_(\\d{4})$"
+  mm_yy <- do.call(rbind, regmatches(rain_cols, regexec(rx, rain_cols, ignore.case = TRUE)))
+  # mm_yy columns: full match, month, year
+  mon_chr <- tolower(mm_yy[, 2])
+  yr_int  <- as.integer(mm_yy[, 3])
   
-  if (length(cols) == 0) {
-    # create an NA column to avoid rowMeans errors
-    data[[new_name]] <- NA_real_
-  } else {
-    data[[new_name]] <- rowMeans(data[cols], na.rm = TRUE)
+  mon_lut <- c("jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec")
+  mon_num <- match(mon_chr, mon_lut)
+  
+  rain_dates <- as.Date(sprintf("%04d-%02d-01", yr_int, mon_num))  # first of each month
+  
+  ord <- order(rain_dates)
+  rain_dates <- rain_dates[ord]
+  rain_cols  <- rain_cols[ord]
+  
+  ## 3) Build a matrix of monthly rainfall (force numeric)
+  pmm_mat <- as.matrix(data[rain_cols])
+  storage.mode(pmm_mat) <- "double"
+  
+  ## 4) Pre-compute indices for each (year, month) 12-month window
+  data$experiment_year <- as.integer(data$experiment_year)
+  years  <- sort(unique(data$experiment_year))
+  months <- sprintf("%02d", 1:12)
+  
+  idx_by_yrmon <- vector("list", length = length(years) * 12L)
+  names(idx_by_yrmon) <- as.vector(outer(years, months, paste, sep = "_"))
+  
+  for (yr in years) {
+    for (m in months) {
+      start <- as.Date(sprintf("%04d-%s-01", yr, m))
+      end   <- as.Date(sprintf("%04d-%s-01", yr + 1L, m))  # exclusive
+      idx   <- which(rain_dates >= start & rain_dates < end)
+      idx_by_yrmon[[paste0(yr, "_", m)]] <- idx
+    }
   }
+  
+  ## 5) Sum rainfall over the 12-month window for each row
+  keys <- paste0(
+    data$experiment_year, "_",
+    sprintf("%02d", as.integer(data$planting_month))  # robust if planting_month is character
+  )
+  idx_list <- idx_by_yrmon[keys]
+  
+  data$pmm_yr_data <- mapply(
+    function(i, idx) {
+      if (length(idx) == 0L) return(NA_real_)
+      vals <- pmm_mat[i, idx]
+      if (all(is.na(vals))) return(NA_real_)
+      sum(vals, na.rm = TRUE)
+    },
+    seq_len(nrow(data)), idx_list
+  )
 }
 
-# pick the mean column that corresponds to each row’s experiment_year
-pick_cols <- paste0("spei_mean_", data$experiment_year)
-idx <- match(pick_cols, names(data))
 
-# pick the row that value that corresponds to the spei for that particular year
-data$spei_yr_data <- mapply( 
-  function(i, j) if (is.na(j)) NA_real_ else as.numeric(data[[j]][i]),
-  seq_len(nrow(data)), idx
-)
+# c) SPEI INDEX---------------------------------------------------------------
+
+# Determine the average spei index over the growing period of 12 months
+
+## 1) Identify monthly SPEI columns and parse their dates
+spei_cols  <- grep("^spei_\\d{4}-\\d{2}-\\d{2}$", names(data), value = TRUE)
+
+if (length(spei_cols) == 0L) {
+  data$spei_mean_12mo <- NA_real_
+} else {
+  spei_dates <- as.Date(sub("^spei_", "", spei_cols), format = "%Y-%m-%d")
+  
+  ## Order by calendar time and align columns
+  ord <- order(spei_dates)
+  spei_dates <- spei_dates[ord]
+  spei_cols  <- spei_cols[ord]
+  
+  ## 2) Build a matrix of monthly SPEI (force numeric)
+  spei_mat <- as.matrix(data[spei_cols])
+  storage.mode(spei_mat) <- "double"
+  
+  ## 3) Pre-compute indices for each (year, month) 12-month window
+  data$experiment_year <- as.integer(data$experiment_year)
+  years  <- sort(unique(data$experiment_year))
+  months <- sprintf("%02d", 1:12)
+  
+  idx_by_yrmon <- vector("list", length = length(years) * 12L)
+  names(idx_by_yrmon) <- as.vector(outer(years, months, paste, sep = "_"))
+  
+  for (yr in years) {
+    for (m in months) {
+      start <- as.Date(sprintf("%04d-%s-01", yr, m))
+      end   <- as.Date(sprintf("%04d-%s-01", yr + 1L, m))  # exclusive
+      idx   <- which(spei_dates >= start & spei_dates < end)
+      idx_by_yrmon[[paste0(yr, "_", m)]] <- idx
+    }
+  }
+  
+  ## 4) Average SPEI over the 12-month window for each row
+  keys <- paste0(
+    data$experiment_year, "_",
+    sprintf("%02d", as.integer(data$planting_month))  # robust if planting_month is char
+  )
+  idx_list <- idx_by_yrmon[keys]
+  
+  data$spei_yr_data <- mapply(
+    function(i, idx) {
+      if (length(idx) == 0L) return(NA_real_)
+      vals <- spei_mat[i, idx]
+      if (all(is.na(vals))) return(NA_real_)
+      mean(vals, na.rm = TRUE)
+    },
+    seq_len(nrow(data)), idx_list
+  )
+}
 
 
-##----- Aggregation of Soil texture, SOC, BD, water content and pH by soil depth-------
+
+# d) Aggregation of Soil texture, SOC, BD, water content and pH by soil depth-------
 
 # These soil properties are given for depths 0–5, 5–15, 15–30, 30–60, 60–100, 100-200.
 # However, we assume that cassava roots go up-to 100m. A weighted average for each property 
@@ -233,127 +282,7 @@ data <- data %>%
 
 ##---- 3. FITTING BOUNDARY LINE MODELS -----------------------------------------
 
-#-- 3.1. Minimum Temperature full data ===========================================
-
-#- a) Summary statistics--------------------------------------------------------
-
-dat_tmin <- data[, c("decimal_longitude","decimal_latitude","cassava_fr_root_yld_tha","tmin_yr_data")]
-dat_tmin <- dat_tmin[!duplicated(dat_tmin), ] # remove duplicate entries
-
-x <- dat_tmin$tmin_yr_data
-y <- dat_tmin$cassava_fr_root_yld_tha
-
-summastat(x) # check for normality and transform if necessary
-summastat(y)
-summastat(sqrt(y))
-
-plot(x,sqrt(y))
-
-#- b) Outlier detection---------------------------------
-dat_tmin <- data.frame(x=x, y=sqrt(y))
-out <- bagplot(dat_tmin, show.whiskers=F)
-dat_tmin <- rbind(out$pxy.bag, out$pxy.outer) # removes outliers
-
-#- c) Initial starting values for model and estimate of the sd of measurement error -----------------
-
-plot(dat_tmin[,1], dat_tmin[,2])
-startValues("trapezium") # determine start values by clicking on the plot the points that make up the desired model.
-# In this case for the trapezium, 4 points are required. Determine multiple values and 
-# insert them into the list as below.
-
-start2 <- list(c(-21.66, 1.65, 7.35, 30.96,-1.15, mean(dat_tmin[,1]), mean(dat_tmin[,2]), sd(dat_tmin[,1]), sd(dat_tmin[,2]), cor(dat_tmin[,1],dat_tmin[,2])),
-               c(-24.63, 1.83, 7.69, 40.67,-1.57, mean(dat_tmin[,1]), mean(dat_tmin[,2]), sd(dat_tmin[,1]), sd(dat_tmin[,2]), cor(dat_tmin[,1],dat_tmin[,2])),
-               c(-23.64, 1.77, 7.68, 50.18,-2.02 , mean(dat_tmin[,1]), mean(dat_tmin[,2]), sd(dat_tmin[,1]), sd(dat_tmin[,2]), cor(dat_tmin[,1],dat_tmin[,2])))
-
-sigh <- c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8) # vector of possible values for sd of measurement error
-ble_extention(data = dat_tmin, start = start2, sigh = sigh, model = "trapezium") # determines the maximum likelihood for each  sd of measurement error value
-# Select one with the largest likelihood value
-
-#- d) model fitting --------------------------------------------------------------
-
-par(mar=c(6,5,4,2)) # adjusting ploting parameters
-
-model_min_temp <- cbvn_extention(data=dat_tmin, start = start2, sigh = 0.1, model = "trapezium", pch=16, col="grey",
-                                 ylab=expression(bold("Yield / "* sqrt(t~ha^-1))), 
-                                 xlab=expression(bold("Min Temperature/ "^o*"C")))
-
-akweight(model_min_temp$AIC[1,1], model_min_temp$AIC[2,1]) # check the akaike weights for boundary and null model
-
-x1 <- data$tmin_yr_data
-x1[which(is.na(x1)==T)] <- mean(x1, na.rm = T)
-tmin <- predictBL(model_min_temp, x1) # predicts the boundary value for each value of x in the data set
-
-#- e) Plot boundary line on original scale--------------------------
-
-x_tmin <- seq(15.8,23.1, 0.001)
-y_tmin <- predictBL(model_min_temp, x_tmin)
-plot(dat_tmin[,1], dat_tmin[,2]^2, pch=16, col="grey", ylab=expression(bold("Yield / t ha"^-1)), 
-     xlab=expression(bold("Min Temperature/"^o*"C")))
-lines(x_tmin, y_tmin^2, col="red", lwd=2)  
-
-
-#-- 3.2. Maximum Temperature full data ===========================================
-
-#- a) Summary statistics--------------------------------------------------------
-
-dat_tmax <- data[, c("decimal_longitude","decimal_latitude","cassava_fr_root_yld_tha","tmax_yr_data")]
-dat_tmax <- dat_tmax[!duplicated(dat_tmax), ] # remove duplicate entries
-
-x <- dat_tmax$tmax_yr_data
-y <- dat_tmax$cassava_fr_root_yld_tha
-
-summastat(x) # check for normality and transform if necessary
-summastat(sqrt(x))
-summastat(log(x))
-summastat(y)
-summastat(sqrt(y))
-
-plot(log(x),sqrt(y))
-
-#- b) Outlier detection--------------------------------------------------------
-
-dat_tmax <- data.frame(x=log(x), y=sqrt(y))
-out <- bagplot(dat_tmax, show.whiskers=F, factor = 3.0)
-dat_tmax <- rbind(out$pxy.bag, out$pxy.outer) # removes outliers
-
-#- c) Initial starting values for model and estimate of the sd of measurement error -----------------
-
-plot(dat_tmax[,1], dat_tmax[,2])
-startValues("lp")# determine start values by clicking on the plot the points that make up the desired model.
-# In this case for the linear-plateau, 3 points are required. Determine multiple values and 
-# insert them into the list as below.
-
-start2 <- list(c(-413.74, 127.63, 7.63, mean(dat_tmax[,1]), mean(dat_tmax[,2]), sd(dat_tmax[,1]), sd(dat_tmax[,2]), cor(dat_tmax[,1],dat_tmax[,2])),
-               c(-406.61, 125.45, 7.66, mean(dat_tmax[,1]), mean(dat_tmax[,2]), sd(dat_tmax[,1]), sd(dat_tmax[,2]), cor(dat_tmax[,1],dat_tmax[,2])),
-               c(-468.63, 144.14, 8.00, mean(dat_tmax[,1]), mean(dat_tmax[,2]), sd(dat_tmax[,1]), sd(dat_tmax[,2]), cor(dat_tmax[,1],dat_tmax[,2])))
-
-sigh <- c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8)# vector of possible values for sd of measurement error
-ble_extention(data = dat_tmax, start = start2, sigh = sigh, model = "lp")# determines the maximum likelihood for each  sd of measurement error value
-# Select one with the largest likelihood value
-
-
-#- d) model fitting ------------------------------------------------------------
-
-model_max_temp <- cbvn_extention(data=dat_tmax, start = start2, sigh = 0.5, model = "lp", pch=16, col="grey",
-                                 ylab=expression(bold("Yield / "* sqrt(t~ha^-1))), 
-                                 xlab=expression(bold("Max Temperature/ log("^o*"C)")))
-
-akweight(model_max_temp$AIC[1,1], model_max_temp$AIC[2,1]) # check the akaike weights for boundary and null model
-
-x2 <- log(data$tmax_yr_data)
-x2[which(is.na(x2)==T)] <- mean(x2, na.rm = T)
-tmax <- predictBL(model_max_temp, x2) # predicts the boundary value for each value of x in the data set
-
-#- e) Plot boundary line on original scale--------------------------------------
-
-x_tmax <- seq(3.275,3.45, 0.001)
-y_tmax <- predictBL(model_max_temp, x_tmax)
-plot(exp(dat_tmax[,1]), dat_tmax[,2]^2, pch=16, col="grey", ylab=expression(bold("Yield / t ha"^-1)), 
-     xlab=expression(bold("Max Temperature/"^o*"C")))
-lines(exp(x_tmax), y_tmax^2, col="red", lwd=2)  
-
-
-#-- 3.3. Growing Degree Days ===========================================
+#-- 3.1. Growing Degree Days ===========================================
 
 dat_GDD <- data[, c("decimal_longitude","decimal_latitude","cassava_fr_root_yld_tha","GDD_planting_window")]
 dat_GDD <- dat_GDD[!duplicated(dat_GDD), ] # remove duplicate entries
@@ -375,13 +304,15 @@ dat_GDD <- rbind(out$pxy.bag, out$pxy.outer) # removes outliers
 #- c) Initial starting values for model and estimate of the sd of measurement error -----------------
 
 plot(dat_GDD[,1], dat_GDD[,2], pch=16, col="grey")
-startValues("trapezium")# determine start values by clicking on the plot the points that make up the desired model.
+startValues("lp")# determine start values by clicking on the plot the points that make up the desired model.
 # In this case for the trapezium, 4 points are required. Determine multiple values and 
 # insert them into the list as below.
 
-start2 <- list(c(20.19, -0.002, 8.05, mean(dat_GDD[,1]), mean(dat_GDD[,2]), sd(dat_GDD[,1]), sd(dat_GDD[,2]), cor(dat_GDD[,1],dat_GDD[,2])),
-               c(18.99, -0.002, 7.94, mean(dat_GDD[,1]), mean(dat_GDD[,2]), sd(dat_GDD[,1]), sd(dat_GDD[,2]), cor(dat_GDD[,1],dat_GDD[,2])),
-               c(19.10, -0.002, 7.97, mean(dat_GDD[,1]), mean(dat_GDD[,2]), sd(dat_GDD[,1]), sd(dat_GDD[,2]), cor(dat_GDD[,1],dat_GDD[,2])))
+start2 <- list(c(20.34, -0.002, 7.97, mean(dat_GDD[,1]), mean(dat_GDD[,2]), sd(dat_GDD[,1]), sd(dat_GDD[,2]), cor(dat_GDD[,1],dat_GDD[,2])),
+               c(18.62, -0.002, 8.09, mean(dat_GDD[,1]), mean(dat_GDD[,2]), sd(dat_GDD[,1]), sd(dat_GDD[,2]), cor(dat_GDD[,1],dat_GDD[,2])),
+               c(19.62, -0.002, 7.82, mean(dat_GDD[,1]), mean(dat_GDD[,2]), sd(dat_GDD[,1]), sd(dat_GDD[,2]), cor(dat_GDD[,1],dat_GDD[,2])),
+               c(18.53, -0.002, 7.74, mean(dat_GDD[,1]), mean(dat_GDD[,2]), sd(dat_GDD[,1]), sd(dat_GDD[,2]), cor(dat_GDD[,1],dat_GDD[,2])),
+               c(22.01, -0.003, 8.08, mean(dat_GDD[,1]), mean(dat_GDD[,2]), sd(dat_GDD[,1]), sd(dat_GDD[,2]), cor(dat_GDD[,1],dat_GDD[,2])))
 
 sigh <- c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8)# vector of possible values for sd of measurement error
 
@@ -390,7 +321,7 @@ ble_extention(data = dat_GDD, start = start2, sigh = sigh, model = "lp") # deter
 
 #- d) Model fitting-------------------------------------------------------------
 
-model_GDD <- cbvn_extention(data=dat_GDD, start = start2, sigh = 0.3, model = "lp", pch=16, col="grey",
+model_GDD <- cbvn_extention(data=dat_GDD, start = start2, sigh = 0.4, model = "lp", pch=16, col="grey",
                             ylab = expression(bold("Yield / " * sqrt(t~ha^-1))), 
                             xlab = expression(bold("GDD / "^o*"C")))
 
@@ -402,14 +333,14 @@ GDD <- predictBL(model_GDD, x4)# predicts the boundary value for each value of x
 
 #- e) Plot boundary line on original scale--------------------------------------
 
-x_GDD <- seq(4250,6000,1)
+x_GDD <- seq(4000,6500,1)
 y_GDD <- predictBL(model_GDD, x_GDD)
 plot(dat_GDD[,1], dat_GDD[,2]^2, pch=16, col="grey", ylab=expression(bold("Yield / t ha"^-1)), 
      xlab=expression(bold("GDD / "^o*"C")))
 lines(x_GDD, y_GDD^2, col="red", lwd=2)  
 
 
-#-- 3.4. Precipitation (Rainfall) ===============================================
+#-- 3.2. Precipitation (Rainfall) ===============================================
 
 dat_pmm <- data[, c("decimal_longitude","decimal_latitude","cassava_fr_root_yld_tha","pmm_yr_data")]
 dat_pmm <- dat_pmm[!duplicated(dat_pmm), ]# remove duplicate entries
@@ -421,7 +352,6 @@ y <- dat_pmm$cassava_fr_root_yld_tha
 
 summastat(x) # check for normality and transform if necessary
 summastat(sqrt(y))
-plot(x,sqrt(y))
 
 #- b) Outlier detection---------------------------------------------------------
 
@@ -436,10 +366,10 @@ startValues("lp")# determine start values by clicking on the plot the points tha
 # In this case for the linear-plateau, 2 points are required. Determine multiple values and 
 # insert them into the list as below.
 
-start2 <- list(c(12.12, -0.002, 7.96, mean(dat_pmm[,1]), mean(dat_pmm[,2]), sd(dat_pmm[,1]), sd(dat_pmm[,2]), cor(dat_pmm[,1],dat_pmm[,2])),
-               c(13.68, -0.004, 7.67, mean(dat_pmm[,1]), mean(dat_pmm[,2]), sd(dat_pmm[,1]), sd(dat_pmm[,2]), cor(dat_pmm[,1],dat_pmm[,2])),
-               c(12.71, -0.003, 7.74, mean(dat_pmm[,1]), mean(dat_pmm[,2]), sd(dat_pmm[,1]), sd(dat_pmm[,2]), cor(dat_pmm[,1],dat_pmm[,2])),
-               c(11.76, -0.003, 7.56, mean(dat_pmm[,1]), mean(dat_pmm[,2]), sd(dat_pmm[,1]), sd(dat_pmm[,2]), cor(dat_pmm[,1],dat_pmm[,2])))
+start2 <- list(c(7.72, 0.00, 7.72, mean(dat_pmm[,1]), mean(dat_pmm[,2]), sd(dat_pmm[,1]), sd(dat_pmm[,2]), cor(dat_pmm[,1],dat_pmm[,2])),
+               c(7.82, 0.00, 7.82, mean(dat_pmm[,1]), mean(dat_pmm[,2]), sd(dat_pmm[,1]), sd(dat_pmm[,2]), cor(dat_pmm[,1],dat_pmm[,2])),
+               c(8.00, 0.00, 8.00, mean(dat_pmm[,1]), mean(dat_pmm[,2]), sd(dat_pmm[,1]), sd(dat_pmm[,2]), cor(dat_pmm[,1],dat_pmm[,2])),
+               c(7.42, 0.00, 7.42, mean(dat_pmm[,1]), mean(dat_pmm[,2]), sd(dat_pmm[,1]), sd(dat_pmm[,2]), cor(dat_pmm[,1],dat_pmm[,2])))
 
 
 sigh <- c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8)# vector of possible values for sd of measurement error
@@ -467,7 +397,7 @@ plot(dat_pmm[,1], dat_pmm[,2]^2, pch=16, col="grey", ylab=expression(bold("Yield
 lines(x_pmm, y_pmm^2, col="red", lwd=2)  
 
 
-#-- 3.5 SPEI Index -------------------------------------------------------------
+#-- 3.3 SPEI Index -------------------------------------------------------------
 
 #- a) Summary statistics--------------------------------------------------------
 
@@ -477,56 +407,56 @@ dat_spei <- dat_spei[!duplicated(dat_spei), ] # remove duplicate entries
 x <- dat_spei$spei_yr_data
 y <- dat_spei$cassava_fr_root_yld_tha
 
-summastat(x) # check for normality and transform if necessary
+summastat(x)
+summastat(log(x+1)) # check for normality and transform if necessary
 summastat(y)
 summastat(sqrt(y))
 
-plot(x,sqrt(y))
-
 #- b) Outlier detection---------------------------------
-dat_spei <- data.frame(x=x, y=sqrt(y))
-out <- bagplot(dat_spei, show.whiskers=F)
+dat_spei <- data.frame(x=log(x+1), y=sqrt(y))
+out <- bagplot(dat_spei, show.whiskers=F, na.rm = TRUE)
 dat_spei <- rbind(out$pxy.bag, out$pxy.outer) # removes outliers
 
 #- c) Initial starting values for model and estimate of the sd of measurement error -----------------
 
 plot(dat_spei[,1], dat_spei[,2])
-startValues("lp") # determine start values by clicking on the plot the points that make up the desired model.
+startValues("trapezium") # determine start values by clicking on the plot the points that make up the desired model.
 # In this case for the lp, 2 points are required. Determine multiple values and 
 # insert them into the list as below.
 
-start2 <- list(c(9.75, 13.92, 7.39, mean(dat_spei[,1]), mean(dat_spei[,2]), sd(dat_spei[,1]), sd(dat_spei[,2]), cor(dat_spei[,1],dat_spei[,2])),
-               c(10.24, 17.60, 7.53, mean(dat_spei[,1]), mean(dat_spei[,2]), sd(dat_spei[,1]), sd(dat_spei[,2]), cor(dat_spei[,1],dat_spei[,2])),
-               c(9.28, 13.99, 7.68, mean(dat_spei[,1]), mean(dat_spei[,2]), sd(dat_spei[,1]), sd(dat_spei[,2]), cor(dat_spei[,1],dat_spei[,2])))
+start2 <- list(c(9.06, 12.78, 7.77,15.39,-22.91, mean(dat_spei[,1]), mean(dat_spei[,2]), sd(dat_spei[,1]), sd(dat_spei[,2]), cor(dat_spei[,1],dat_spei[,2])),
+               c(8.89, 12.68, 7.64,10.28,-7.79, mean(dat_spei[,1]), mean(dat_spei[,2]), sd(dat_spei[,1]), sd(dat_spei[,2]), cor(dat_spei[,1],dat_spei[,2])),
+               c(11.12, 19.28, 7.68,17.54,-26.82, mean(dat_spei[,1]), mean(dat_spei[,2]), sd(dat_spei[,1]), sd(dat_spei[,2]), cor(dat_spei[,1],dat_spei[,2])),
+               c(9.15, 13.00, 7.80,11.31,-10.55, mean(dat_spei[,1]), mean(dat_spei[,2]), sd(dat_spei[,1]), sd(dat_spei[,2]), cor(dat_spei[,1],dat_spei[,2])))
 
 sigh <- c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8) # vector of possible values for sd of measurement error
-ble_extention(data = dat_spei, start = start2, sigh = sigh, model = "lp") # determines the maximum likelihood for each  sd of measurement error value
+ble_extention(data = dat_spei, start = start2, sigh = sigh, model = "trapezium") # determines the maximum likelihood for each  sd of measurement error value
 # Select one with the largest likelihood value
 
 #- d) model fitting --------------------------------------------------------------
 
 par(mar=c(6,5,4,2)) # adjusting ploting parameters
 
-model_spei <- cbvn_extention(data=dat_spei, start = start2, sigh = 0.4, model = "lp", pch=16, col="grey",
+model_spei <- cbvn_extention(data=dat_spei, start = start2, sigh = 0.7, model = "trapezium", pch=16, col="grey",
                              ylab=expression(bold("Yield / "* sqrt(t~ha^-1))), 
                              xlab=expression(bold("SPEI INDEX")))
 
 akweight(model_spei$AIC[1,1], model_spei$AIC[2,1]) # check the akaike weights for boundary and null model
 
-x1 <- data$spei_yr_data
+x1 <- log(data$spei_yr_data+1)
 x1[which(is.na(x1)==T)] <- mean(x1, na.rm = T)
 spei <- predictBL(model_spei, x1) # predicts the boundary value for each value of x in the data set
 
 #- e) Plot boundary line on original scale--------------------------
 
-x_spei<- seq(-0.5,0.6, 0.001)
+x_spei<- seq(-0.35,0.6, 0.001)
 y_spei <- predictBL(model_spei, x_spei)
-plot(dat_spei[,1], dat_spei[,2]^2, pch=16, col="grey", ylab=expression(bold("Yield / t ha"^-1)), 
+plot(exp(dat_spei[,1])-1, dat_spei[,2]^2, pch=16, col="grey", ylab=expression(bold("Yield / t ha"^-1)), 
      xlab=expression(bold("SPEI INDEX")))
-lines(x_spei, y_spei^2, col="red", lwd=2)  
+lines(exp(x_spei)-1, y_spei^2, col="red", lwd=2)  
 
 
-#-- 3.6. Solar Radiation model =================================================
+#-- 3.4. Solar Radiation model =================================================
 
 dat_SR <- data[, c("decimal_longitude","decimal_latitude","cassava_fr_root_yld_tha","SR_annual_MJ_m2_tilted")]
 dat_SR <- dat_SR[!duplicated(dat_SR), ]# remove duplicate entries
@@ -539,7 +469,6 @@ y <- dat_SR$cassava_fr_root_yld_tha
 summastat(x)# check for normality and transform if necessary
 summastat(y)
 summastat(sqrt(y))
-plot(x,sqrt(y))
 
 #- b) Outlier detection---------------------------------------------------------
 
@@ -585,7 +514,7 @@ lines(x_SR, y_SR^2, col="red", lwd=2)
 
 #An annual total of 5,000–7,000 MJ m⁻² year⁻¹ is generally favorable cassava
 
-#-- 3.7. Soil clay model =========================================================
+#-- 3.5. Soil clay model =========================================================
 
 dat_clay <- data[, c("decimal_longitude","decimal_latitude","cassava_fr_root_yld_tha","clay")]
 dat_clay <- dat_clay[!duplicated(dat_clay), ] # removes duplicated rows
@@ -598,7 +527,6 @@ y <- dat_clay$cassava_fr_root_yld_tha
 
 summastat(x) # check for normality and transform if necessary
 summastat(sqrt(y))
-plot(x,sqrt(y))
 
 #- b) Outlier detection---------------------------------------------------------
 
@@ -640,17 +568,18 @@ akweight(model_clay$AIC[1,1], model_clay$AIC[2,1]) # check the akaike weights fo
 x5 <- data$clay
 x5[which(is.na(x5)==T)] <- mean(x5, na.rm = T)
 clay <- predictBL(model_clay, x5) # predicts the boundary value for each value of x in the data set
+clay <- ifelse(clay< 0,0, clay)
 
 #- e) Plot boundary line on original scale--------------------------------------
 
-x_clay<- seq(14,48,0.1)
+x_clay<- seq(14,50,0.1)
 y_clay <- predictBL(model_clay, x_clay)
 plot(dat_clay[,1], dat_clay[,2]^2, pch=16, col="grey", ylab=expression(bold("Yield / t ha"^-1)), 
      xlab=expression(bold("Clay content / %")))
 lines(x_clay, y_clay^2, col="red", lwd=2)  
 
 
-#-- 3.8. Sand model ============================================================
+#-- 3.6. Sand model ============================================================
 
 dat_sand <- data[, c("decimal_longitude","decimal_latitude","cassava_fr_root_yld_tha","sand")]
 dat_sand <- dat_sand[!duplicated(dat_sand), ] # remove duplicate entries
@@ -663,7 +592,6 @@ y <- dat_sand$cassava_fr_root_yld_tha
 
 summastat(x) # check for normality and transform if necessary
 summastat(sqrt(y))
-plot(x,sqrt(y))
 
 #- b) Outlier detection---------------------------------------------------------
 
@@ -711,7 +639,7 @@ plot(dat_sand[,1], dat_sand[,2]^2, pch=16, col="grey", ylab=expression(bold("Yie
 lines(x_sand, y_sand^2, col="red", lwd=2)  
 
 
-#-- 3.9. Soil pH model ===========================================================
+#-- 3.7. Soil pH model ===========================================================
 
 data_pH <- data[, c("decimal_longitude","decimal_latitude","cassava_fr_root_yld_tha","soil_pH")]
 data_pH <- data_pH[!duplicated(data_pH), ]# remove duplicate entries
@@ -724,7 +652,6 @@ y <- data_pH$cassava_fr_root_yld_tha
 
 summastat(x) # check for normality and transform if necessary
 summastat(sqrt(y))
-plot(x,sqrt(y))
 
 #- b) Outlier detection---------------------------------------------------------
 
@@ -759,6 +686,7 @@ akweight(model_pH$AIC[1,1], model_pH$AIC[2,1]) # check the akaike weights for bo
 x5 <- data$soil_pH
 x5[which(is.na(x5)==T)] <- mean(x5, na.rm = T)
 pH <- predictBL(model_pH , x5) # predicts the boundary value for each value of x in the data set
+pH <- ifelse(pH< 0,0, pH)
 
 #- e) Plot boundary line on original scale---------------------------------------
 
@@ -768,7 +696,7 @@ plot(data_pH[,1], data_pH[,2]^2, pch=16, col="grey", ylab=expression(bold("Yield
      xlab=expression(bold("soil pH")))
 lines(x_pH, y_pH^2, col="red", lwd=2)  
 
-#-- 3.10. Soil organic carbon model =============================================
+#-- 3.8. Soil organic carbon model =============================================
 
 data_SOC <- data[, c("decimal_longitude","decimal_latitude","cassava_fr_root_yld_tha","SOC")]
 data_SOC <- data_SOC[!duplicated(data_SOC), ]# remove duplicate entries
@@ -828,7 +756,7 @@ plot(exp(data_SOC[,1]), data_SOC[,2]^2, pch=16, col="grey", ylab=expression(bold
      xlab=expression(bold("SOC")))
 lines(exp(x_SOC), y_SOC^2, col="red", lwd=2)
 
-#-- 3.11. Soil bulk density model ===============================================
+#-- 3.9. Soil bulk density model ===============================================
 
 data_BD <- data[, c("decimal_longitude","decimal_latitude","cassava_fr_root_yld_tha","BD")]
 data_BD <- data_BD[!duplicated(data_BD), ]# remove duplicate entries
@@ -841,7 +769,6 @@ y <- data_BD$cassava_fr_root_yld_tha
 
 summastat(x) # check for normality and transform if necessary
 summastat(sqrt(y))
-plot(x,sqrt(y))
 
 #- b) Outlier detection---------------------------------------------------------
 
@@ -878,7 +805,7 @@ x5 <- data$BD/1000
 x5[which(is.na(x5)==T)] <- mean(x5, na.rm = T)
 BD <- predictBL(model_BD , x5) # predicts the boundary value for each value of x in the data set
 BD <- ifelse(BD< 0,0, BD )
-summary(BD)
+
 #- e) Plot boundary line on original scale--------------------------------------
 
 x_BD<- seq(1.25,1.45,0.001)
@@ -888,7 +815,7 @@ plot(data_BD[,1], data_BD[,2]^2, pch=16, col="grey", ylab=expression(bold("Yield
 lines(x_BD, y_BD^2, col="red", lwd=2)  
 
 
-#-- 3.12. Water_holding capacity model==========================================
+#-- 3.10. Water_holding capacity model==========================================
 
 data_PAW <- data[, c("decimal_longitude","decimal_latitude","cassava_fr_root_yld_tha","vwc_33kpa","vwc_1500kpa")]
 data_PAW <- data_PAW[!duplicated(data_PAW), ] # remove duplicate entries
@@ -902,7 +829,6 @@ y <- data_PAW$cassava_fr_root_yld_tha
 
 summastat(x)  # check for normality and transform if necessary
 summastat(sqrt(y))
-plot(x,sqrt(y))
 
 #- b) Outlier detection---------------------------------------------------------
 
@@ -939,6 +865,7 @@ akweight(model_paw$AIC[1,1], model_paw$AIC[2,1]) # check the akaike weights for 
 x5 <- (data$vwc_33kpa - data$vwc_1500kpa)/1000
 x5[which(is.na(x5)==T)] <- mean(x5, na.rm = T)
 paw <- predictBL(model_paw , x5) # predicts the boundary value for each value of x in the data set
+paw <- ifelse(paw< 0,0, paw )
 
 #- e) Plot boundary line on original scale--------------------------------------
 
@@ -949,7 +876,7 @@ plot(data_PAW[,1], data_PAW[,2]^2, pch=16, col="grey", ylab=expression(bold("Yie
 lines(x_paw, y_paw^2, col="red", lwd=2)  
 
 
-#-- 3.13. Disease ==============================================================
+#-- 3.11. Disease ==============================================================
 
 disease_data <- data.frame(x=as.factor(data$disease),y=data$cassava_fr_root_yld_tha)
 
@@ -991,7 +918,7 @@ points(x_pos, y_val, pch = 16, col = "red") # add censoring points
 segments(x_pos - 0.1, y_val, x_pos + 0.1, y_val, col = "red", lwd = 2)# Small horizontal lines through each point
 
 
-#-- 3.14. Disease Severity =====================================================
+#-- 3.12. Disease Severity =====================================================
 
 severity_data <- data.frame(x=as.factor(data$severity),y=data$cassava_fr_root_yld_tha)
 
@@ -1041,7 +968,7 @@ segments(x_pos - 0.1, y_val, x_pos + 0.1, y_val, col = "red", lwd = 2)# Small ho
 # are the predicted boundary values from the various boundary line models, tmin, tmax, 
 # rainfall, sand, pH, clay, SR, SOC, paw, BD determined earlier.
 
-Limiting <- limfactor(tmin, tmax, rainfall, sand, pH, clay, SR, SOC, paw, BD, GDD, disease_severity, spei)
+Limiting <- limfactor(sand, pH, clay, SR, SOC, paw, BD, GDD, disease_severity, spei)
 
 # a) Attainable yield-----------------------------------------------------------
 
@@ -1077,15 +1004,6 @@ box()
 {
   par(mfrow=c(3,2))
   par(mar=c(5,7,4,2))
-  
-  plot(dat_tmin[,1], dat_tmin[,2]^2, pch=16, col="grey", ylab=expression(bold("Yield / t ha"^-1)), 
-       xlab=expression(bold("Min Temperature/"^o*"C")))
-  lines(x_tmin, y_tmin^2, col="red", lwd=2)  
-  
-  
-  plot(exp(dat_tmax[,1]), dat_tmax[,2]^2, pch=16, col="grey", ylab=expression(bold("Yield / t ha"^-1)), 
-       xlab=expression(bold("Max Temperature/"^o*"C")))
-  lines(exp(x_tmax), y_tmax^2, col="red", lwd=2)  
   
   plot(dat_GDD[,1], dat_GDD[,2]^2, pch=16, col="grey", ylab=expression(bold("Yield / t ha"^-1)), 
        xlab=expression(bold("GDD / "^o*"C")))
