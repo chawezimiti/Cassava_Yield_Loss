@@ -11,7 +11,6 @@
 library(devtools)
 install_github("chawezimiti/BLA") # installs the development version of BLA
 
-
 library(readr)
 library(readxl)
 library(dplyr)
