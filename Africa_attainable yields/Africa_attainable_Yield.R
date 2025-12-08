@@ -9,123 +9,35 @@ library(sf) # mapping
 source("Extra_functions.R")
 
 
-## Read in data-----------------------------------------------------------------
+## 1) Read in data-----------------------------------------------------------------
 
-#data <- read_csv("master_dataset_v14.csv")
-data <- read_csv("03-merged_abbr_rainfall_tmin_tmax_(v2).csv")
+data <- read_csv("03-merged_abbr_rainfall_tmin_tmax_(v3).csv")
 names(data)
 
-# 1) Data manipulation and Feature engineering ----------------------------------------------------------
+# 1) Data manipulation and Feature engineering ================================================================================
 
-# Select only African countries: applies only to the master data set
-
-# data$continent <- countrycode(data$country,
-#                               origin = "country.name",
-#                               destination = "continent")
-# 
-# levels(as.factor(data$country))
-# levels(as.factor(data$continent))
-# levels(as.factor(data[which(data$continent=="Africa"),]$country))
-# 
-# data <- data[which(data$continent=="Africa"),]
-# 
-# Af <- vect("Africa_Countries.shp") # Tanzania shape file for extents
-# Af <- project(Af, "EPSG:4326") #optional, convert to decimal degrees
-# plot(Af)
-# points(data$decimal_longitude, data$decimal_latitude, cex=0.5, pch=16, col="red")
-# 
-# plot(data$decimal_latitude,data$cassava_fr_root_yld_tha,  cex=0.5, pch=16, col="red")
-
-# Here we aggregate some of the data according to the year for climatic variables 
-# and by depth for soil properties.
-
-
-which(is.na(data$experiment_year))# check for NA in the experiment year, to be used to aggregate climatic variables at site.
+length(which(is.na(data$experiment_year)))# check for NA in the experiment year. To be used to aggregate climatic variables at site.
 unique(data$experiment_year)
+
+# The next step allows us to retain the only the first 4 characters for experiment years that have more than 4 digits e.g 2002-2003 will be 2002
 
 data$experiment_year <- ifelse(
   nchar(data$experiment_year) > 4,
   substr(data$experiment_year, 1, 4),
   data$experiment_year
-) # this step allows us to retain the only the first 4 characters for experiment years that have more than 4 digits e.g 2002-2004 will be 2002
+) 
 
 data <- data %>% mutate(experiment_year = as.integer(experiment_year)) #converts the experimental year column to integer
 years <- sort(unique(na.omit(data$experiment_year)))
 
-length(which(is.na(data$planting_month)))# check for NA in the experiment year
-unique(data$planting_month) # check if the values are sensible between 1 and 12
+length(which(is.na(data$planting_month)))# check for NA in the Planting month. PM is used as start point for aggregation of climatic variables
+unique(data$planting_month) # check if the values for PM are sensible between 1 and 12
 
-## a) Cumulative rainfall----------------------------------------------------------
+## a) Cumulative Precipitation ==========================================================
 
-rain_cols <- grep("^(?:pmm|ppm)_\\d{4}_\\d{2}$",
-                  names(data),
-                  value = TRUE,
-                  ignore.case = TRUE)
-
-if (length(rain_cols) == 0L) {
-  data$pmm_sum_12mo <- NA_real_
-} else {
-  ## 2) Parse year + month from column names
-  rx <- "^(?:pmm|ppm)_(\\d{4})_(\\d{2})$"
-  mm_yy <- do.call(
-    rbind,
-    regmatches(rain_cols, regexec(rx, rain_cols, ignore.case = TRUE))
-  )
-  # mm_yy columns: full match, year, month
-  yr_int  <- as.integer(mm_yy[, 2])
-  mon_int <- as.integer(mm_yy[, 3])
-  
-  # Use first of each month for date indexing
-  rain_dates <- as.Date(sprintf("%04d-%02d-01", yr_int, mon_int))
-  
-  # Order both dates and column names chronologically
-  ord <- order(rain_dates)
-  rain_dates <- rain_dates[ord]
-  rain_cols  <- rain_cols[ord]
-  
-  ## 3) Convert rainfall values into a numeric matrix
-  pmm_mat <- as.matrix(data[rain_cols])
-  storage.mode(pmm_mat) <- "double"
-  
-  ## 4) Precompute 12-month windows
-  data$experiment_year <- as.integer(data$experiment_year)
-  years  <- sort(unique(data$experiment_year))
-  months <- sprintf("%02d", 1:12)
-  
-  idx_by_yrmon <- vector("list", length = length(years) * 12L)
-  names(idx_by_yrmon) <- as.vector(outer(years, months, paste, sep = "_"))
-  
-  for (yr in years) {
-    for (m in months) {
-      start <- as.Date(sprintf("%04d-%s-01", yr, m))
-      end   <- as.Date(sprintf("%04d-%s-01", yr + 1L, m))  # exclusive
-      idx   <- which(rain_dates >= start & rain_dates < end)
-      idx_by_yrmon[[paste0(yr, "_", m)]] <- idx
-    }
-  }
-  
-  ## 5) Compute 12-month rainfall total for each row
-  keys <- paste0(
-    data$experiment_year, "_",
-    sprintf("%02d", as.integer(data$planting_month))
-  )
-  idx_list <- idx_by_yrmon[keys]
-  
-  data$pmm_yr_data <- mapply(
-    function(i, idx) {
-      if (length(idx) == 0L) return(NA_real_)
-      vals <- pmm_mat[i, idx]
-      if (all(is.na(vals))) return(NA_real_)
-      sum(vals, na.rm = TRUE)
-    },
-    seq_len(nrow(data)), idx_list
-  )
-}
-
-
-plot(data$pmm_yr_data, data$cassava_fr_root_yld_tha)
-
-#-------------new update
+# The Cumulative rainfall is determined for the 4 critical stages of cassava growth
+# Which include the i) establishment stage (0-1 month), vegetative stage (2-4 months),
+# bulking (5-8 months) and maturation (9-12 months).
 
 rain_cols <- grep("^(?:pmm|ppm)_\\d{4}_\\d{1,2}$",
                   names(data),
@@ -221,8 +133,8 @@ if (length(rain_cols) == 0L) {
       # p5_8  <- sum_range(4, 7)   # months 5–8
       # p9_12 <- sum_range(8, 11)  # months 9–12
       
-      p1_2  <- sum_range(0, 0)   # months 1–2
-      p3_4  <- sum_range(1, 3)   # months 3–4
+      p1_2  <- sum_range(0, 0)   # months 1
+      p3_4  <- sum_range(1, 3)   # months 2–4
       p5_8  <- sum_range(4, 8)   # months 5–8
       p9_12 <- sum_range(9, 11)  # months 9–12
       
@@ -232,29 +144,58 @@ if (length(rain_cols) == 0L) {
     SIMPLIFY = TRUE
   ))
   
-  data$Establishment  <- res_mat[, 1]
-  data$Canopy  <- res_mat[, 2]
-  data$Bulking  <- res_mat[, 3]
-  data$Maturation <- res_mat[, 4]
+  data$pmm_early  <- res_mat[, 1]
+  data$pmm_vegetative  <- res_mat[, 2]
+  data$pmm_bulking  <- res_mat[, 3]
+  data$pmm_maturation <- res_mat[, 4]
 }
 
-plot(data$Establishment, sqrt(data$cassava_fr_root_yld_tha))
-plot(data$Canopy, sqrt(data$cassava_fr_root_yld_tha))
-plot(data$Bulking, sqrt(data$cassava_fr_root_yld_tha))
-plot(data$Maturation, sqrt(data$cassava_fr_root_yld_tha))
+# First exploration of plots of yield~rainfall by regions of Africa (East, West, South, central)
+regions <- unique(data$region)
+cols <- c("red", "blue", "green", "yellow", "black")
+region_col <- cols[ match(data$region, regions) ]
 
-## b) Temperature Indices -------------------------------------------------------
+# i) longitude~latitude
+plot(data$decimal_longitude , data$decimal_latitude, col=region_col, pch=16)
+legend("topright", legend=regions, pch=16, col=c("red", "blue", "green", "yellow"))
 
-# here we create Growing degree days, Heat stress degree days and chilling degree days
+# ii) cassava yield~longitude
+plot(data$decimal_longitude , sqrt(data$cassava_fr_root_yld_tha), col=region_col, pch=16)
+legend("topleft", legend=regions, pch=16, col=c("red", "blue", "green", "yellow"))
 
-data$experiment_year  <- as.integer(data$experiment_year)
-data$planting_month   <- as.integer(data$planting_month)
+# iii) cassava yield~latitude
+plot(data$decimal_latitude , sqrt(data$cassava_fr_root_yld_tha), col=region_col, pch=16)
+legend("topleft", legend=regions, pch=16, col=c("red", "blue", "green", "yellow"))
+
+# iv) cassava yield ~ rainfall (establishment)
+plot(data$pmm_early , sqrt(data$cassava_fr_root_yld_tha), col=region_col, pch=16)
+legend("topright", legend=regions, pch=16, col=c("red", "blue", "green", "yellow"))
+
+# v) cassava yield ~ rainfall (vegetation)
+plot(data$pmm_vegetative, sqrt(data$cassava_fr_root_yld_tha), col=region_col, pch=16)
+legend("topright", legend=regions, pch=16, col=c("red", "blue", "green", "yellow"))
+
+# vi) cassava yield ~ rainfall (bulking)
+plot(data$pmm_bulking, sqrt(data$cassava_fr_root_yld_tha), col=region_col, pch=16)
+legend("topright", legend=regions, pch=16, col=c("red", "blue", "green", "yellow"))
+
+# vii) cassava yield ~ rainfall (maturation)
+plot(data$pmm_maturation, sqrt(data$cassava_fr_root_yld_tha), col=region_col, pch=16)
+legend("topright", legend=regions, pch=16, col=c("red", "blue", "green", "yellow"))
+
+
+## b) Temperature Indices =============================================================
+
+# Here we create Growing degree days, Heat stress degree days and chilling degree days.
+# The GDD, HSDD and CDD is determined for the 4 critical stages of cassava growth
+# Which include the i) establishment stage (0-1 month), vegetative stage (2-4 months),
+# bulking (5-8 months) and maturation (9-12 months).
 
 data$planting_date <- as.Date(
   sprintf("%04d-%02d-01", data$experiment_year, data$planting_month)
 )
 
-## 1. Identify daily Tmin/Tmax columns and common dates -------------------
+## Identify daily Tmin/Tmax columns and common dates ---------------------------
 
 tmin_cols  <- grep("^tmin_\\d{4}_\\d{2}_\\d{2}$", names(data), value = TRUE)
 tmax_cols  <- grep("^tmax_\\d{4}_\\d{2}_\\d{2}$", names(data), value = TRUE)
@@ -283,7 +224,7 @@ if (length(common_dates) == 0L) {
   
 } else {
   
-  ## 2. Align daily temperature matrices ----------------------------------
+  ## Align daily temperature matrices ----------------------------------
   
   tmin_common_cols <- paste0("tmin_", format(common_dates, "%Y_%m_%d"))
   tmax_common_cols <- paste0("tmax_", format(common_dates, "%Y_%m_%d"))
@@ -292,22 +233,22 @@ if (length(common_dates) == 0L) {
   tmax_mat <- as.matrix(data[tmax_common_cols]); storage.mode(tmax_mat) <- "double"
   tmean_mat <- (tmin_mat + tmax_mat) / 2
   
-  ## 3. Thresholds + stages (cassava) -------------------------------------
+  ## Thresholds + stages (cassava) -------------------------------------
   
   Tbase_gdd   <- 10  # GDD base
-  Tcrit_heat  <- 32  # heat-stress threshold (32 original)
-  Tbase_chill <- 18 # cold-stress threshold (15 original)
+  Tcrit_heat  <- 32  # heat-stress threshold 
+  Tbase_chill <- 18 # cold-stress threshold 
   
   # stages in days after planting (DAP); upper bound is exclusive
   stages <- list(
-    early       = c(0,   60),   # 0–60 DAP
-    vegetative  = c(60,  120),  # 60–120 DAP
+    early       = c(0,   30),   # 0–60 DAP
+    vegetative  = c(30,  120),  # 60–120 DAP
     bulking     = c(120, 240),  # 120–240 DAP
     maturation  = c(240, 365)   # 240–365 DAP
   )
   
   
-  ## 4. Row-wise calculation of GDD, HSDD, CDD by stage -------------------
+  ## Row-wise calculation of GDD, HSDD, CDD by stage -------------------
   
   res <- mapply(
     function(i) {
@@ -365,7 +306,7 @@ if (length(common_dates) == 0L) {
   
   res <- t(res)
   
-  ## 5. Attach back to data -----------------------------------------------
+  ## Attach back to data -----------------------------------------------
   
   data$GDD_early          <- res[, "GDD_early"]
   data$GDD_vegetative     <- res[, "GDD_vegetative"]
@@ -386,58 +327,84 @@ if (length(common_dates) == 0L) {
   data$CDD_total  <- rowSums(data[, c("CDD_early","CDD_vegetative","CDD_bulking","CDD_maturation")], na.rm = TRUE)
 }
 
+# First exploration of plots of yield~rainfall by regions of Africa (East, West, South, central)
 
-plot(data$GDD_early , sqrt(data$cassava_fr_root_yld_tha), pch=16, col="grey")
-plot(data$GDD_vegetative, sqrt(data$cassava_fr_root_yld_tha), pch=16, col="grey")
-plot(data$GDD_bulking, sqrt(data$cassava_fr_root_yld_tha), pch=16, col="grey")
-plot(data$GDD_maturation , sqrt(data$cassava_fr_root_yld_tha), pch=16, col="grey")
-plot(data$GDD_total, sqrt(data$cassava_fr_root_yld_tha), pch=16, col="grey")
+# i) Yield~establishment (0-1 months)
+plot(data$GDD_early , sqrt(data$cassava_fr_root_yld_tha), col=region_col, pch=16)
+legend("topleft", legend=regions, pch=16, col=c("red", "blue", "green", "yellow"))
 
-plot(data$HSDD_early, sqrt(data$cassava_fr_root_yld_tha), pch=16, col="grey", xlim=c(0,20))
-plot(data$HSDD_vegetative, sqrt(data$cassava_fr_root_yld_tha), pch=16, col="grey")
-plot(data$HSDD_bulking , sqrt(data$cassava_fr_root_yld_tha), pch=16, col="grey")
-plot(data$HSDD_maturation, sqrt(data$cassava_fr_root_yld_tha), pch=16, col="grey")
-plot(data$HSDD_total, sqrt(data$cassava_fr_root_yld_tha), pch=16, col="grey")
+# ii) Yield~vegetative (2-4 months)
+plot(data$GDD_vegetative, sqrt(data$cassava_fr_root_yld_tha), col=region_col, pch=16)
+legend("topleft", legend=regions, pch=16, col=c("red", "blue", "green", "yellow"))
 
-plot(data$CDD_early, sqrt(data$cassava_fr_root_yld_tha), pch=16, col="grey")
-plot(data$CDD_vegetative, sqrt(data$cassava_fr_root_yld_tha), pch=16, col="grey")
-plot(data$CDD_bulking, sqrt(data$cassava_fr_root_yld_tha), xlim=c(0,20), pch=16, col="grey")
-plot(data$CDD_maturation, sqrt(data$cassava_fr_root_yld_tha), xlim=c(0,20), pch=16, col="grey")
-plot(data$CDD_total, sqrt(data$cassava_fr_root_yld_tha), xlim=c(0,20), pch=16, col="grey")
+# iii) Yield~bulking (5-8 months)
+plot(data$GDD_bulking, sqrt(data$cassava_fr_root_yld_tha), col=region_col, pch=16)
+legend("topleft", legend=regions, pch=16, col=c("red", "blue", "green", "yellow"))
+
+# iv) Yield~maturation (9-12 months)
+plot(data$GDD_maturation , sqrt(data$cassava_fr_root_yld_tha), col=region_col, pch=16)
+legend("topleft", legend=regions, pch=16, col=c("red", "blue", "green", "yellow"))
+#plot(data$GDD_total, sqrt(data$cassava_fr_root_yld_tha), pch=16, col=region_col)
+
+# v) Yield~establishment (0-1 months)
+plot(data$HSDD_early, sqrt(data$cassava_fr_root_yld_tha), col=region_col, pch=16, xlim=c(0,20))
+legend("topright", legend=regions, pch=16, col=c("red", "blue", "green", "yellow"))
+
+# vi) Yield~vegetative (2-4 months)
+plot(data$HSDD_vegetative, sqrt(data$cassava_fr_root_yld_tha), col=region_col, pch=16)
+legend("topright", legend=regions, pch=16, col=c("red", "blue", "green", "yellow"))
+
+# vii) Yield~bulking (5-8 months)
+plot(data$HSDD_bulking , sqrt(data$cassava_fr_root_yld_tha), col=region_col, pch=16)
+legend("topleft", legend=regions, pch=16, col=c("red", "blue", "green", "yellow"))
+
+# viii) Yield~maturation (9-12 months)
+plot(data$HSDD_maturation, sqrt(data$cassava_fr_root_yld_tha), col=region_col, pch=16)
+legend("topleft", legend=regions, pch=16, col=c("red", "blue", "green", "yellow"))
+#plot(data$HSDD_total, sqrt(data$cassava_fr_root_yld_tha), pch=16, col=region_col)
 
 
-length(which(is.na(data$planting_month)==TRUE))/length(data$planting_month)
-length(which(!is.na(data$planting_month)==TRUE))/length(data$planting_month)
-length(which(is.na(data$experiment_year)==TRUE))/length(data$experiment_year)
-
-
-## c) standard precipitation-evaporation index ---------------------------------
+## c) standard precipitation-evaporation index===========================================
 
 # Determine the average spei index over the growing period of 12 months
+# The spei is determined for the 4 critical stages of cassava growth
+# Which include the i) establishment stage (0-1 month), vegetative stage (2-4 months),
+# bulking (5-8 months) and maturation (9-12 months).
 
-## 1) Identify monthly SPEI columns and parse their dates
-
-spei_cols  <- grep("^spei_\\d{4}-\\d{2}-\\d{2}$", names(data), value = TRUE)
+spei_cols  <- grep("^spei_\\d{4}-\\d{2}-\\d{1,2}$", names(data), value = TRUE)## Identify monthly SPEI columns with dates like spei_2007-10-2
 
 if (length(spei_cols) == 0L) {
-  data$spei_mean_12mo <- NA_real_
+  data$spei_early  <- NA_real_
+  data$spei_vegetative  <- NA_real_
+  data$spei_bulking  <- NA_real_
+  data$spei_maturation <- NA_real_
+  
 } else {
+  
+  ## Convert to Date
   spei_dates <- as.Date(sub("^spei_", "", spei_cols), format = "%Y-%m-%d")
   
-  ## Order by calendar time and align columns
+  ## Order by date and align columns
   ord <- order(spei_dates)
   spei_dates <- spei_dates[ord]
   spei_cols  <- spei_cols[ord]
   
-  ## 2) Build a matrix of monthly SPEI (force numeric)
+  ## SPEI matrix
   spei_mat <- as.matrix(data[spei_cols])
   storage.mode(spei_mat) <- "double"
   
-  ## 3) Pre-compute indices for each (year, month) 12-month window
+  ## Clean experiment year (handle "2013-2016")
+  data$experiment_year <- ifelse(
+    nchar(data$experiment_year) > 4,
+    substr(data$experiment_year, 1, 4),
+    data$experiment_year
+  )
   data$experiment_year <- as.integer(data$experiment_year)
+  
   years  <- sort(unique(data$experiment_year))
   months <- sprintf("%02d", 1:12)
   
+  ## Build full year-month index
   idx_by_yrmon <- vector("list", length = length(years) * 12L)
   names(idx_by_yrmon) <- as.vector(outer(years, months, paste, sep = "_"))
   
@@ -450,127 +417,265 @@ if (length(spei_cols) == 0L) {
     }
   }
   
-  ## 4) Average SPEI over the 12-month window for each row
-  keys <- paste0(
-    data$experiment_year, "_",
-    sprintf("%02d", as.integer(data$planting_month))  # robust if planting_month is char
-  )
-  idx_list <- idx_by_yrmon[keys]
+  ## Helper to compute period-averages
+  get_period_mean <- function(i, year, p_start, p_end) {
+    this_year <- as.integer(year)
+    key_months <- sprintf("%02d", p_start:p_end)
+    
+    idx_vec <- unlist(idx_by_yrmon[paste0(this_year, "_", key_months)])
+    if (length(idx_vec) == 0L) return(NA_real_)
+    vals <- spei_mat[i, idx_vec]
+    if (all(is.na(vals))) return(NA_real_)
+    mean(vals, na.rm = TRUE)
+  }
   
-  data$spei_yr_data <- mapply(
-    function(i, idx) {
-      if (length(idx) == 0L) return(NA_real_)
-      vals <- spei_mat[i, idx]
-      if (all(is.na(vals))) return(NA_real_)
-      mean(vals, na.rm = TRUE)
-    },
-    seq_len(nrow(data)), idx_list
-  )
+  ## Apply to each row
+  data$spei_early <- mapply(function(i, yr)
+    get_period_mean(i, yr, 0, 1),
+    seq_len(nrow(data)), data$experiment_year)
+  
+  data$spei_vegetative <- mapply(function(i, yr)
+    get_period_mean(i, yr, 2, 4),
+    seq_len(nrow(data)), data$experiment_year)
+  
+  data$spei_bulking <- mapply(function(i, yr)
+    get_period_mean(i, yr, 5, 8),
+    seq_len(nrow(data)), data$experiment_year)
+  
+  data$spei_maturation <- mapply(function(i, yr)
+    get_period_mean(i, yr, 9, 12),
+    seq_len(nrow(data)), data$experiment_year)
 }
 
-plot(data$spei_yr_data, data$cassava_fr_root_yld_tha)
+# First exploration of plots of yield~rainfall by regions of Africa (East, West, South, central)
 
+# i) Yield~establishment (0-1 months)
+plot(data$spei_early, sqrt(data$cassava_fr_root_yld_tha), col=region_col, pch=16)
+legend("topleft", legend=regions, pch=16, col=c("red", "blue", "green", "yellow"))
 
-## c) Latitude-Yield -----------------------------------------------------------
+# ii) Yield~vegetation (2-4 months)
+plot(data$spei_vegetative, sqrt(data$cassava_fr_root_yld_tha), col=region_col, pch=16)
+legend("topleft", legend=regions, pch=16, col=c("red", "blue", "green", "yellow"))
+
+# iii) Yield~bulking (5-8 months)
+plot(data$spei_bulking, sqrt(data$cassava_fr_root_yld_tha), col=region_col, pch=16)
+legend("topleft", legend=regions, pch=16, col=c("red", "blue", "green", "yellow"))
+
+# iv) Yield~maturation (9-12 months)
+plot(data$spei_maturation, sqrt(data$cassava_fr_root_yld_tha), col=region_col, pch=16)
+legend("topleft", legend=regions, pch=16, col=c("red", "blue", "green", "yellow"))
+
+# 1) Boundary line model fitting  ==============================================
+
+## a) Latitude-Yield ===========================================================
 
 # The attainable yield are modeled based on the latitude. The distance away from 
-# the latitude 0. To check the influence of climate on cassava yields.
+# the equator, latitude 0. To check the influence of climate on cassava yields.
 
-# Create a data frame and standardize the missing  values (either NA or blank spaces) to NA
-
-dat <- data.frame(x=data$decimal_latitude,y=data$cassava_fr_root_yld_tha)
-dat[dat == ""] <- NA
+dat <- data.frame(x=data$decimal_latitude,y=data$cassava_fr_root_yld_tha) 
+dat[dat == ""] <- NA # standardize missing  values (NA or blank spaces) to NA
 dat  <- na.omit(dat) # omit all rows with the NA values
+plot(dat, pch=16, col="grey")
 
-plot(dat)
-
-# Summary statistics------------------------------------------------------------
-
+## i) Summary statistics-----------
 summastat(dat[,2]) # the plots do not look normally distributed. We try transforming
 summastat(sqrt(dat[,2])) #looks better
-
 dat$y <- sqrt(dat[,2])
 
-## Bagplot outliers ------------------------------------------------------------
+## ii) Bagplot outlier detection and removal -----------
+out <- bagplot(dat, show.whiskers=F, na.rm = TRUE) # identifies outliers
+dat_clean<- rbind(out$pxy.bag, out$pxy.outer) # removes outliers
 
-out <- bagplot(dat, show.whiskers=F, na.rm = TRUE)
-dat_clean<- rbind(out$pxy.bag, out$pxy.outer)
-plot(dat_clean)
+## iii) Explore boundary structure in the data cloud ---------
+expl_boundary(x=dat_clean[,1], y=dat_clean[,2], method = "Area") 
 
-{par(mfrow=c(1,2))
-  plot(dat, ylim=c(0,10), pch=16)
-  abline(h=max(dat_clean[,2]), col="red")
-  plot(dat_clean, ylim=c(0,10), pch=16)
-  par(mfrow=c(1,1))}
+## iv) Define the boundary line model ----------------
 
-
-
-# Explore boundary presence ----------------------------------------------------
-
-expl_boundary(x=dat_clean[,1], y=dat_clean[,2], method = "Area") # no evidence of boundary
-
-# Fitting the boundary line model ----------------------------------------------
-
-# a) trapezium model------------------------------------------------------------
-
-# determine Start values for the boundary line model 
-
-plot(dat_clean)
-startValues("trapezium")
-
-# start2 <- list(c(9.47, 0.20, 8.02, 14.44,-0.42, mean(dat_clean[,1], na.rm = T), mean(dat_clean[,2], na.rm = T), sd(dat_clean[,1], na.rm = T), sd(dat_clean[,2], na.rm = T), cor(dat_clean[,1],dat_clean[,2], use = "complete.obs")),        
-#                c(9.13, 0.19, 8.07, 14.81,-0.44, mean(dat_clean[,1], na.rm = T), mean(dat_clean[,2], na.rm = T), sd(dat_clean[,1], na.rm = T), sd(dat_clean[,2], na.rm = T), cor(dat_clean[,1],dat_clean[,2], use = "complete.obs")),
-#                c(9.10, 0.20, 8.11, 13.96,-0.31, mean(dat_clean[,1], na.rm = T), mean(dat_clean[,2], na.rm = T), sd(dat_clean[,1], na.rm = T), sd(dat_clean[,2], na.rm = T), cor(dat_clean[,1],dat_clean[,2], use = "complete.obs")))
-
-
-start2 <- list(c(12.35, 0.41, 8.00, 13.33, -0.61, mean(dat_clean[,1], na.rm = T), mean(dat_clean[,2], na.rm = T), sd(dat_clean[,1], na.rm = T), sd(dat_clean[,2], na.rm = T), cor(dat_clean[,1],dat_clean[,2], use = "complete.obs")),        
-               c(11.46, 0.34, 8.03 , 13.35,-0.59, mean(dat_clean[,1], na.rm = T), mean(dat_clean[,2], na.rm = T), sd(dat_clean[,1], na.rm = T), sd(dat_clean[,2], na.rm = T), cor(dat_clean[,1],dat_clean[,2], use = "complete.obs")),
-               c(11.30, 0.31, 8.06, 13.47, -0.66, mean(dat_clean[,1], na.rm = T), mean(dat_clean[,2], na.rm = T), sd(dat_clean[,1], na.rm = T), sd(dat_clean[,2], na.rm = T), cor(dat_clean[,1],dat_clean[,2], use = "complete.obs")))
-# determining of the standard deviation of measurement error
-
-sigh <- c(0.1,0.2,0.3,0.4,0.5,0.6)
-ble_extention(data = dat_clean, start = start2, sigh = sigh, model = "trapezium")
-
-# model fitting 
-
-par(mar=c(6,5,4,2)) # plot size parameter adjustment
-
-cbvn_extention(data=dat_clean, start = start2, sigh = 0.6, model = "trapezium", pch=16, col="grey",
-               ylab=expression(bold("Yield / t ha"^-1)), 
-               xlab=expression(bold("Latitude")), main="trapezium Model")
-
-## b) Mirror trapezium model --------------------------------------------------
-
-# This function creates a trapezium function that is mirrored at the equator
-
-trap_mirror <- function(x, a, b, c) {
-  # x : predictor variable
-  # a : inflection point (distance from 0 where plateau starts)
-  # b : slope (positive number)
-  # c : plateau value (maximum)
-  
-  d <- abs(x) - a                 # distance from plateau edge
+trap_mirror <- function(x, a, b, c) { 
+  # a=inflection point (distance from 0 where plateau starts), b=slope (positive),c=plateau value
+  d <- abs(x) - a 
   y <- ifelse(d <= 0, c, c - b * d)
   return(y)
 }
 
-plot(dat_clean)
-startValues("trapezium") # use the trapezium to set the starting values (the slope and max value) for the trapezium mirror
+## iv) Initial start values for optimizing parameters of the bivariate distribution and the mirror model
 
-start2 <- list(c(10, 0.42, 8.02, mean(dat_clean[,1], na.rm = T), mean(dat_clean[,2], na.rm = T), sd(dat_clean[,1], na.rm = T), sd(dat_clean[,2], na.rm = T), cor(dat_clean[,1],dat_clean[,2], use = "complete.obs")),        
-               c(11, 0.44, 8.07, mean(dat_clean[,1], na.rm = T), mean(dat_clean[,2], na.rm = T), sd(dat_clean[,1], na.rm = T), sd(dat_clean[,2], na.rm = T), cor(dat_clean[,1],dat_clean[,2], use = "complete.obs")),
-               c(10.5, 0.31, 8.21, mean(dat_clean[,1], na.rm = T), mean(dat_clean[,2], na.rm = T), sd(dat_clean[,1], na.rm = T), sd(dat_clean[,2], na.rm = T), cor(dat_clean[,1],dat_clean[,2], use = "complete.obs")))
+# First, determine the data distribution properties i.e mean of x and y, sd of x and y, and correlation of x and y
+
+dist_lat <- c(mean(dat_clean[,1], na.rm = T), mean(dat_clean[,2], na.rm = T), sd(dat_clean[,1], na.rm = T), 
+              sd(dat_clean[,2], na.rm = T), cor(dat_clean[,1],dat_clean[,2], use = "complete.obs"))
+
+plot(dat_clean, pch=16, col="grey")
+startValues("trapezium") # Determine the start values for the mirror trapezium model i.e inflection point, slope and plateau value
+
+# determine multiple start values
+start_lat <- list(c(10, 0.42, 8.02, dist_lat), c(11, 0.44, 8.07, dist_lat), c(10.5, 0.31, 8.21, dist_lat))
+
+## v) Determine the sigh value (Related to sd of measurement error), which a hyper-parameter of censored normal model
+
+ble_extention(data = dat_clean, start = start_lat, sigh = sigh, model = "other", equation=trap_mirror) #determine sigh by maximum likelihood
+
+## v) Fit the boundary model
+
+model_lat <- cbvn_extention(data = dat_clean, start = start_lat, sigh = 0.3, model = "other", equation=trap_mirror, 
+                            pch=16, col="grey", ylab=expression(bold("Yield / sqrt(t ha"^-1*")")), xlab=expression(bold("Latitude")),
+                            main="Mirror boundary Model", optim.method = "Nelder-Mead")
 
 
-sigh <- c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8) #possible measurement error values
+## b) Rainfall-Yield Model ===========================================================
 
-ble_extention(data = dat_clean, start = start2, sigh = sigh, model = "other", equation=trap_mirror) #determine measurement error by maximum likelihood
+# we fit the boundary model for establishment (1-2 months), vegetative growth (2-4 months),
+# root bulking (5-9 months) and maturation (9-12 months)
+
+### b.1. Establishment =========================================================
+
+dat_est <- data.frame(x=data$pmm_early, y=data$cassava_fr_root_yld_tha)
+
+## i) Distribution properties of data-------
+
+summastat(dat_est[,1])
+summastat(log(dat_est[,1]))
+summastat(dat_est[,2]) # the plots do not look normally distributed. We try transforming
+summastat(sqrt(dat_est[,2])) #looks better
+
+dat_est$x <- log(dat_est[,1])
+dat_est$y <- sqrt(dat_est[,2])
+
+## ii) Bagplot outlier identification and removal-----
+
+out <- bagplot(dat_est, show.whiskers=F, na.rm = TRUE)
+dat_est_clean <- rbind(out$pxy.bag, out$pxy.outer)
+
+## iii) Initial start values for optimizing parameters of the bivariate distribution and boundary model----
+
+# First, determine the data distribution properties i.e mean of x and y, sd of x and y, and correlation of x and y
+dist_pmm_est <- c(mean(dat_est_clean[,1], na.rm = T), mean(dat_est_clean[,2], na.rm = T), sd(dat_est_clean[,1], na.rm = T), 
+                  sd(dat_est_clean[,2], na.rm = T), cor(dat_est_clean[,1],dat_est_clean[,2], use = "complete.obs"))
+
+plot(dat_est_clean, pch=16, col="grey")
+startValues("lp") # Determine the start values for the linear-plateau model i.e intercept, slope and plateau value
+start_pmm_est <- list(c(25.45, -3.32, 8.17, dist_pmm_est), c(27.61, -3.67, 8.02, dist_pmm_est), c(27.52, -3.65, 7.89, dist_pmm_est))
+
+## iv) Fit the boundary model---------
+
+# we use the sigh from the yield~latitude model
+
+model_pmm_est <- cbvn_extention(data = dat_est_clean, start = start_pmm_est, sigh = 0.3, model = "lp", 
+                                  pch=16, col="grey",ylab=expression(bold("Yield / t ha"^-1)), 
+                                  xlab=expression(bold("Rainfall (0-1 months)/mm")))
+
+### b.2. vegetative growth (Canopy growth)===========================================
+
+dat_veg <- data.frame(x=data$pmm_vegetative, y=data$cassava_fr_root_yld_tha)
+
+## i) Distribution properties of data-------
+
+summastat(dat_veg[,1])
+summastat(log(dat_veg[,1]))
+summastat(dat_veg[,2]) # The plots do not look normally distributed. We try transforming
+summastat(sqrt(dat_veg[,2])) #looks better
+dat_veg$y <- sqrt(dat_veg[,2])
+
+## ii) Bagplot outlier identification and removal-----
+out <- bagplot(dat_veg, show.whiskers=F, na.rm = TRUE)
+dat_veg_pmm <- rbind(out$pxy.bag, out$pxy.outer)
+
+## iii) Initial start values for optimizing parameters of the bivariate distribution and boundary model----
+
+# First, determine the data distribution properties i.e mean of x and y, sd of x and y, and correlation of x and y
+dist_pmm_veg <- c(mean(dat_veg_pmm[,1], na.rm = T), mean(dat_veg_pmm[,2], na.rm = T), sd(dat_veg_pmm[,1], na.rm = T), 
+                  sd(dat_veg_pmm[,2], na.rm = T), cor(dat_veg_pmm[,1],dat_veg_pmm[,2], use = "complete.obs"))
+
+plot(dat_veg_pmm, pch=16, col="grey")
+startValues("trapezium") # Determine the start values for the trapezium model i.e two intercept, two slopes and plateau value
+
+start_pmm_veg <- list(c(6.06, 0.011, 8.34,15.20,-0.011, dist_pmm_veg),c(5.87, 0.011, 8.29,15.04,-0.011, dist_pmm_veg),
+                  c(5.69, 0.015, 8.35,14.31,-0.010, dist_pmm_veg), c(5.04, 0.015, 8.35,14.31,-0.010, dist_pmm_veg),
+                  c(5.48, 0.018, 8.19,15.99,-0.011, dist_pmm_veg))
+
+## iv) Fit the boundary model---------
+
+# we use the sigh = 0.3 from the yield~latitude model
+
+model_pmm_veg <- cbvn_extention(data = dat_veg_pmm, start = start_pmm_veg, sigh = 0.3, model = "trapezium", 
+                                pch=16, col="grey", ylab=expression(bold("Yield / t ha"^-1)), 
+                                xlab=expression(bold("Rainfall (1-4 months)/mm")))
 
 
-cbvn_extention(data = dat_clean, start = start2, sigh = 0.6, model = "other", equation=trap_mirror, pch=16, col="grey",
-               ylab=expression(bold("Yield / t ha"^-1)), 
-               xlab=expression(bold("Latitude")),
-               main="Mirror Model")
+### b.3. Root Bulking ============================================================
+
+dat_bulk <- data.frame(x=data$pmm_bulking, y=data$cassava_fr_root_yld_tha)
+
+## i) Distribution properties of data-------
+
+summastat(dat_bulk[,1]) 
+summastat(log(dat_bulk[,1])) 
+summastat(sqrt(dat_bulk[,1])) 
+summastat(dat_bulk[,2]) # the plots do not look normally distributed. We try transforming
+summastat(sqrt(dat_bulk[,2])) #looks better
+
+dat_bulk$x <- log(dat_bulk[,1])
+dat_bulk$y <- sqrt(dat_bulk[,2])
+
+## ii) Bagplot outlier identification and removal-----
+
+out <- bagplot(dat_bulk, show.whiskers=F, na.rm = TRUE)
+dat_bulk_clean<- rbind(out$pxy.bag, out$pxy.outer)
+
+## iii) Initial start values for optimizing parameters of the bivariate distribution and boundary model----
+
+# First, determine the data distribution properties i.e mean of x and y, sd of x and y, and correlation of x and y
+dist_bulk <- c(mean(dat_bulk_clean[,1], na.rm = T), mean(dat_bulk_clean[,2], na.rm = T), sd(dat_bulk_clean[,1], na.rm = T), 
+              sd(dat_bulk_clean[,2], na.rm = T), cor(dat_bulk_clean[,1],dat_bulk_clean[,2], use = "complete.obs"))
+
+plot(dat_bulk_clean, pch=16, col="grey")
+startValues("trapezium") # Determine the start values for the trapezium model i.e two intercept, two slopes and plateau value
+
+start_bulk <- list(c(6.06, 0.011, 8.34, dist_bulk), c(5.87, 0.011, 8.29, dist_bulk), c(5.48, 0.018, 8.19, dist_bulk))
+
+## iv) Fit the boundary model---------
+
+# we use the sigh = 0.3 from the yield~latitude model
+
+model_pmm_bulk <- cbvn_extention(data = dat_bulk_clean, start = start_bulk, sigh = 0.3, model = "lp", pch=16, col="grey",
+                                ylab=expression(bold("Yield / t ha"^-1)), xlab=expression(bold("Rainfall (4-9 months)/mm")), 
+                                optim.method = "Nelder-Mead")
+
+### b.4. Maturation===============================================================
+
+dat_Mat <- data.frame(x=data$pmm_maturation, y=data$cassava_fr_root_yld_tha)
+
+## i) Distribution properties of data-------
+summastat(dat_Mat[,1])
+summastat(sqrt(dat_Mat[,1]))
+summastat(dat_Mat[,2]) # the plots do not look normally distributed. We try transforming
+summastat(sqrt(dat_Mat[,2])) #looks better
+
+dat_Mat$x <- sqrt(dat_Mat[,1])
+dat_Mat$y <- sqrt(dat_Mat[,2])
+
+## ii) Bagplot outlier identification and removal-----
+out <- bagplot(dat_Mat, show.whiskers=F, na.rm = TRUE)
+dat_Mat_clean<- rbind(out$pxy.bag, out$pxy.outer)
+
+## iii) Initial start values for optimizing parameters of the bivariate distribution and boundary model----
+
+# First, determine the data distribution properties i.e mean of x and y, sd of x and y, and correlation of x and y
+dist_Mat <- c(mean(dat_Mat_clean[,1], na.rm = T), mean(dat_Mat_clean[,2], na.rm = T), sd(dat_Mat_clean[,1], na.rm = T), 
+              sd(dat_Mat_clean[,2], na.rm = T), cor(dat_Mat_clean[,1],dat_Mat_clean[,2], use = "complete.obs"))
+
+plot(dat_Mat_clean, pch=16, col="grey")
+startValues("trapezium")# Determine the start values for the trapezium model i.e two intercept, two slopes and plateau value
+
+start_Mat <- list(c(2.68, 0.38, 8.01,12.56,-0.23,dist_Mat),c(1.98, 0.46, 8.17,12.65,-0.23,dist_Mat),c(2.39, 0.42, 8.04,12.30,-0.21, dist_Mat))
+
+## iv) Fit the boundary model---------
+
+# we use the sigh = 0.3 from the yield~latitude model
+
+model_pmm_mat <- cbvn_extention(data = dat_Mat_clean, start = start_Mat, sigh = 0.3, model = "trapezium", 
+                                 pch=16, col="grey", ylab=expression(bold("Yield / t ha"^-1)), 
+                                 xlab=expression(bold("Rainfall (9-12 months)/mm")))
 
 
 

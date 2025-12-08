@@ -159,7 +159,7 @@ cbvn_extention <- function(data,model, equation=NULL, start, sigh, UpLo="U", opt
     tryCatch(
       
       cbvn(data=data, model=model, equation=equation, start=start, sigh=sigh, UpLo=UpLo, optim.method=optim.method,
-           Hessian=Hessian, plot=plot, line_smooth=line_smooth, lwd=2, l_col=lwd,...),
+           Hessian=Hessian, plot=plot, line_smooth=line_smooth, lwd=2, l_col=l_col,...),
       error = function(e) NA)
   })
   
