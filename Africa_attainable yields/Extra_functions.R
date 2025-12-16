@@ -1063,8 +1063,42 @@ predictBL2 <-function(object,x){
 }
 
 
+# 13. Min value selector (similar to limfactor() but no unidentified)
 
-
+min_by_index <- function(...) {
+  
+  # 1. Put all vectors into a dataframe
+  dat <- data.frame(..., check.names = TRUE)
+  names_vec <- names(dat)
+  
+  # 2. Transpose so each row corresponds to one index across vectors
+  dat_t <- as.data.frame(t(dat))
+  
+  # 3. Compute minimum value per index (row)
+  min_vals <- suppressWarnings(unlist(lapply(dat_t, min, na.rm = TRUE)))
+  min_vals[which(min_vals == Inf)] <- NA   # rows of all NA
+  
+  # 4. Find which vector had the minimum (index of min)
+  which_min <- lapply(dat_t, function(row) {
+    if (all(is.na(row))) return(NA)   # no minimum
+    which.min(row)
+  })
+  
+  # 5. Convert index of minimum into the vector name
+  min_names <- lapply(which_min, function(idx, names_vec) {
+    if (is.na(idx)) return(NA)
+    names_vec[idx]
+  }, names_vec = names_vec)
+  
+  # 6. Convert to final dataframe
+  result <- data.frame(
+    min_value = min_vals,
+    vector_name = unlist(min_names),
+    stringsAsFactors = FALSE
+  )
+  
+  return(result)
+}
 
 
 
