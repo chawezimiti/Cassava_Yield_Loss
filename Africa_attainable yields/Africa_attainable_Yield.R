@@ -577,16 +577,16 @@ dist_pmm_est <- c(mean(dat_est_clean[,1], na.rm = T), mean(dat_est_clean[,2], na
                   sd(dat_est_clean[,2], na.rm = T), cor(dat_est_clean[,1],dat_est_clean[,2], use = "complete.obs"))
 
 plot(dat_est_clean, pch=16, col="grey")
-startValues("lp") # Determine the start values for the linear-plateau model i.e intercept, slope and plateau value
-start_pmm_est <- list(c(25.45, -3.32, 8.17, dist_pmm_est), c(27.61, -3.67, 8.02, dist_pmm_est), c(27.52, -3.65, 7.89, dist_pmm_est))
+startValues("inv-logistic",8) # Determine the start values for the linear-plateau model i.e intercept, slope and plateau value
+start_pmm_est <- list(c(5.75, 5, 8.17, dist_pmm_est), c(5.78, 5.2, 8.02, dist_pmm_est), c(5.79, 5.3, 8.10, dist_pmm_est))
 
 ## iv) Fit the boundary model---------
 
 # we use the sigh from the yield~latitude model
 
-model_pmm_est <- cbvn_extention(data = dat_est_clean, start = start_pmm_est, sigh = 0.3, model = "lp", 
-                                  pch=16, col="grey",ylab=expression(bold("Yield / t ha"^-1)), 
-                                  xlab=expression(bold("Rainfall (0-1 months)/mm")))
+model_pmm_est <- cbvn_extention(data = dat_est_clean, start = start_pmm_est, sigh = 0.3, model = "inv-logistic", 
+                                pch=16, col="grey",ylab=expression(bold("Yield / t ha"^-1)), 
+                                xlab=expression(bold("Rainfall (0-1 months)/mm")), optim.method = "Nelder-Mead")
 
 akweight(model_pmm_est$AIC[1,1],model_pmm_est$AIC[2,1]) #strong support for the boundary relative to the unbounded alternative.
 
@@ -685,8 +685,7 @@ start_bulk <- list(c(-2.02, 2.46, 8.20,25.56,-2.66, dist_bulk), c(-1.74, 2.38, 8
 # we use the sigh = 0.3 from the yield~latitude model
 
 model_pmm_bulk <- cbvn_extention(data = dat_bulk_clean, start = start_bulk, sigh = 0.3, model = "trapezium", pch=16, col="grey",
-                                ylab=expression(bold("Yield / t ha"^-1)), xlab=expression(bold("Rainfall (4-9 months)/mm")), 
-                                optim.method = "Nelder-Mead")
+                                ylab=expression(bold("Yield / t ha"^-1)), xlab=expression(bold("Rainfall (4-9 months)/mm")))
 
 akweight(model_pmm_bulk$AIC[1,1],model_pmm_bulk$AIC[2,1])# Clear support for boundary line model. 50% support
 
@@ -714,16 +713,16 @@ dist_Mat <- c(mean(dat_Mat_clean[,1], na.rm = T), mean(dat_Mat_clean[,2], na.rm 
               sd(dat_Mat_clean[,2], na.rm = T), cor(dat_Mat_clean[,1],dat_Mat_clean[,2], use = "complete.obs"))
 
 plot(dat_Mat_clean, pch=16, col="grey")
-startValues("trapezium")# Determine the start values for the trapezium model i.e two intercept, two slopes and plateau value
+startValues("schmidt",8)# Determine the start values for the trapezium model i.e two intercept, two slopes and plateau value
 
-start_Mat <- list(c(2.68, 0.38, 8.01,12.56,-0.23,dist_Mat),c(1.98, 0.46, 8.17,12.65,-0.23,dist_Mat),c(2.39, 0.42, 8.04,12.30,-0.21, dist_Mat))
-
+#start_Mat <- list(c(-246.896, 16.21, 8.01,dist_Mat),c(-235.51, 18.27, 8.17,dist_Mat),c(-109.88, 17.61, 8.04, dist_Mat))# trapezium model
+start_Mat <- list(c(0.01,18.80,8.13, dist_Mat),c(0.02,17.98,8.27, dist_Mat),c(0.02,18.00,8.31, dist_Mat))
 ## iv) Fit the boundary model---------
 
 # we use the sigh = 0.3 from the yield~latitude model
-model_pmm_mat <- cbvn_extention(data = dat_Mat_clean, start = start_Mat, sigh = 0.3, model = "trapezium", 
-                                 pch=16, col="grey", ylab=expression(bold("Yield / t ha"^-1)), 
-                                 xlab=expression(bold("Rainfall (9-12 months)/mm")))
+model_pmm_mat <- cbvn_extention(data = dat_Mat_clean, start = start_Mat, sigh = 0.3, model = "schmidt", 
+                                pch=16, col="grey", ylab=expression(bold("Yield / t ha"^-1)), 
+                                xlab=expression(bold("Rainfall (9-12 months)/mm")))
 
 
 akweight(model_pmm_mat$AIC[1,1],model_pmm_mat$AIC[2,1])# Clear support for boundary line model.
@@ -760,13 +759,13 @@ plot(dat_spei_est_clean, pch=16, col="grey")
 startValues("trapezium") # determines the initial start values for trapezium model
 
 # Combine the model initial parameters and the data distribution properties
-start_spei_early <- list(c(14.13, 11.44, 8.91,11.14,-6.76, dist_spei_est), c(15.06, 12.79, 9.12,11.15,-6.75, dist_spei_est), 
+start_spei_est <- list(c(14.13, 11.44, 8.91,11.14,-6.76, dist_spei_est), c(15.06, 12.79, 9.12,11.15,-6.75, dist_spei_est), 
                          c(14.02, 11.22, 8.89,10.95,-6.41, dist_spei_est))
 
 ## iv) Fit the boundary model---------
 
 # we use the sigh from the yield~latitude model
-model_spei_early <- cbvn_extention(data = dat_spei_est_clean, start = start_spei_est, sigh = 0.3, model = "trapezium", 
+model_spei_est <- cbvn_extention(data = dat_spei_est_clean, start = start_spei_est, sigh = 0.3, model = "trapezium", 
                                    pch=16, col="grey",ylab=expression(bold("Yield / t ha"^-1)), 
                                    xlab=expression(bold("spei (0-1 months)")))
 
@@ -885,6 +884,8 @@ model_spei_mat <- cbvn_extention(data = dat_spei_mat_clean, start = start_spei_m
 
 akweight(model_spei_mat$AIC[1,1],model_spei_mat$AIC[2,1]) #strong support for the boundary relative to the unbounded alternative.
 
+
+# NOTE: Switch to the prediction script
 
 # 2) Attainable yield  ==========================================================
 
@@ -1121,16 +1122,21 @@ rain_veg <- predictBL(model_pmm_veg, data$Filled_pmm_vegetative)
 rain_bulking <- predictBL(model_pmm_bulk, log(data$Filled_pmm_bulking))
 rain_maturation <- predictBL(model_pmm_mat, sqrt(data$Filled_pmm_maturation))
 
+spei_early <- predictBL(model_spei_est, data$spei_early)
+spei_veg <- predictBL(model_spei_veg, data$spei_vegetative)
+spei_bulking <- predictBL(model_spei_bulk, data$spei_bulking)
+spei_maturation <- predictBL(model_spei_mat, data$spei_maturation)
+
 
 dat_out <- min_by_index(rain_early = rain_early,
-                  rain_veg = rain_veg,
-                  rain_bulking = rain_bulking,
-                  rain_maturation = rain_maturation)
+                        rain_veg = rain_veg,
+                        rain_bulking = rain_bulking,
+                        rain_maturation = rain_maturation,
+                        spei_early=spei_early,
+                        spei_veg=spei_veg,
+                        spei_bulking=spei_bulking,
+                        spei_maturation=spei_maturation)
 
-# length(which(is.na(data$PlantMonth_pred)==TRUE))
-# length(which(is.na(rain_bulking)==TRUE))
-# length(rain_bulking)
-# length(which(is.na(data$experiment_year)==TRUE))
 
 par(mar = c(10, 4, 4, 2))  # bottom, left, top, right
 barplot( table(dat_out$vector_name),las = 2, ylab = "Count",xlab = "",main = "Frequency of Names")
@@ -1184,7 +1190,11 @@ ggplot() +
       "rain_early"    = "red",
       "rain_veg"    = "blue",
       "rain_bulking"    = "green",
-      "rain_maturation"    = "purple"
+      "rain_maturation"    = "purple",
+      "spei_early"    = "grey",
+      "spei_veg"    = "black",
+      "spei_bulking"    = "yellow",
+      "spei_maturation"    = "orange"
     ),
     name = "Limiting factor"
   ) +
