@@ -9,7 +9,7 @@
 #------ Install and Load necessary libraries and Source files ------------------------------
 
 library(devtools)
-install_github("chawezimiti/BLA") # installs the development version of BLA
+## installs the development version of BLA
 
 library(readr)
 library(readxl)
@@ -30,7 +30,7 @@ head(data)
 
 #--- 2. Data manipulation and cleaning =======================================
 
-# Here we aggregate some for the data according to the year for climatic variables 
+# Here we aggregate some of the data according to the year for climatic variables 
 # and by depth for soil properties. 
 
 

@@ -1,11 +1,26 @@
-# Ignore all the csv files
+# Ignore all the csv and .xlsx files
 *.csv
+*.xlsx
 
 # Ignore R studio files
 
 *.Rhistory
 *.RData
 
+# Ignore .nc and tif files
+*.nc
+*.tif
+
+# Files
 Tanzania/.RData
 Tanzania/01-all_tanzania_daily_temp(v2).csv
 Africa_attainable_Yield_multiple_sigh.R
+
+Thailand_V1.R
+Thailand_V2.R
+Thailand_V3.R
+spei_thailand.R
+Soil_grid_extraction.R
+
+spei_africa.R
+uncertinity.R

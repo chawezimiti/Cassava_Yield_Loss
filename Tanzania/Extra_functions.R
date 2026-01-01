@@ -146,8 +146,6 @@ ble_extention <- function(data, start, sigh, model, plot=T, optim.method="BFGS",
   
 }
 
-
-
 # 6. cbvn extension ==============================================================================================
 
 
@@ -159,7 +157,7 @@ cbvn_extention <- function(data,model, equation=NULL, start, sigh, UpLo="U", opt
     tryCatch(
       
       cbvn(data=data, model=model, equation=equation, start=start, sigh=sigh, UpLo=UpLo, optim.method=optim.method,
-           Hessian=Hessian, plot=plot, line_smooth=line_smooth, lwd=2, l_col=lwd,...),
+           Hessian=Hessian, plot=plot, line_smooth=line_smooth, lwd=2, l_col=l_col,...),
       error = function(e) NA)
   })
   
@@ -1063,11 +1061,146 @@ predictBL2 <-function(object,x){
 }
 
 
+# 13. Min value selector (similar to limfactor() but no unidentified)
 
+min_by_index <- function(...) {
+  
+  # 1. Put all vectors into a dataframe
+  dat <- data.frame(..., check.names = TRUE)
+  names_vec <- names(dat)
+  
+  # 2. Transpose so each row corresponds to one index across vectors
+  dat_t <- as.data.frame(t(dat))
+  
+  # 3. Compute minimum value per index (row)
+  min_vals <- suppressWarnings(unlist(lapply(dat_t, min, na.rm = TRUE)))
+  min_vals[which(min_vals == Inf)] <- NA   # rows of all NA
+  
+  # 4. Find which vector had the minimum (index of min)
+  which_min <- lapply(dat_t, function(row) {
+    if (all(is.na(row))) return(NA)   # no minimum
+    which.min(row)
+  })
+  
+  # 5. Convert index of minimum into the vector name
+  min_names <- lapply(which_min, function(idx, names_vec) {
+    if (is.na(idx)) return(NA)
+    names_vec[idx]
+  }, names_vec = names_vec)
+  
+  # 6. Convert to final dataframe
+  result <- data.frame(
+    min_value = min_vals,
+    vector_name = unlist(min_names),
+    stringsAsFactors = FALSE
+  )
+  
+  return(result)
+}
 
+# 13b. Min value selector (similar to limfactor() but no unidentified).Also caters 
+# for NA values.
 
+min_by_indexNA <- function(...) {
+  
+  # 1. Put all vectors into a dataframe
+  dat <- data.frame(..., check.names = TRUE)
+  names_vec <- names(dat)
+  
+  # 2. Transpose so each row corresponds to one index across vectors
+  dat_t <- as.data.frame(t(dat))
+  
+  # 3. Compute minimum value per index (row)
+  min_vals <- suppressWarnings(unlist(lapply(dat_t, min, na.rm = FALSE)))
+  min_vals[which(min_vals == Inf)] <- NA   # rows of all NA
+  
+  # 4. Find which vector had the minimum (index of min)
+  which_min <- lapply(dat_t, function(row) {
+    if (all(is.na(row))) return(NA)   # no minimum
+    which.min(row)
+  })
+  
+  # 5. Convert index of minimum into the vector name
+  min_names <- lapply(which_min, function(idx, names_vec) {
+    if (is.na(idx)) return(NA)
+    names_vec[idx]
+  }, names_vec = names_vec)
+  
+  # 6. Convert to final dataframe
+  result <- data.frame(
+    min_value = min_vals,
+    vector_name = unlist(min_names),
+    stringsAsFactors = FALSE
+  )
+  
+  return(result)
+}
 
+# 14. Bolides extention
 
+bolides_extention <- function(x, y,model = "explore",equation = NULL,
+                              start,optim.method = "Nelder-Mead",xmin = min(x, na.rm = TRUE),
+                              xmax = max(x, na.rm = TRUE),plot = TRUE,bp_col = "red",
+                              bp_pch = 16,bl_col = "red",lwd = 1,line_smooth = 1000,...){
+  
+  stopifnot(is.list(start))
+  
+  ## ---- 1. Fit all starts WITHOUT plotting ----
+  models <- lapply(start, function(st){
+    
+    tryCatch(
+      bolides(
+        x = x, y = y,
+        model = model,
+        equation = equation,
+        start = st,
+        optim.method = optim.method,
+        xmin = xmin,
+        xmax = xmax,
+        plot = FALSE,   # 👈 critical
+        bp_col = bp_col,
+        bp_pch = bp_pch,
+        bl_col = bl_col,
+        lwd = lwd,
+        line_smooth = line_smooth,
+        ...
+      ),
+      error = function(e) NA
+    )
+  })
+  
+  ## ---- 2. Extract RMS safely ----
+  rms <- sapply(models, function(m){
+    if (is.list(m) && !is.null(m$RMS)) m$RMS else NA
+  })
+  
+  if (all(is.na(rms))) {
+    stop("All bolides fits failed")
+  }
+  
+  best_id    <- which.min(rms)
+  best_start <- start[[best_id]]
+  
+  ## ---- 3. Refit ONLY the best model (with plot) ----
+  best_model <- bolides(
+    x = x, y = y,
+    model = model,
+    equation = equation,
+    start = best_start,
+    optim.method = optim.method,
+    xmin = xmin,
+    xmax = xmax,
+    plot = plot,     # 👈 plotting happens here
+    bp_col = bp_col,
+    bp_pch = bp_pch,
+    bl_col = bl_col,
+    lwd = lwd,
+    line_smooth = line_smooth,
+    ...
+  )
+  
+  return(best_model)
+}
 
 
 
